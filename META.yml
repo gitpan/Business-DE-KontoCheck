@@ -1,10 +1,20 @@
-# http://module-build.sourceforge.net/META-spec.html
-#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
-name:         Business-DE-KontoCheck
-version:      0.09
-version_from: lib/Business/DE/KontoCheck.pm
-installdirs:  site
-requires:
-
-distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.17
+---
+name: Business-DE-KontoCheck
+version: 0.11
+author:
+  - Tina Mueller
+abstract: Validating Bank-Account Numbers for Germany
+license: perl
+resources:
+  license: http://dev.perl.org/licenses/
+provides:
+  Business::DE::Konto:
+    file: lib/Business/DE/Konto.pm
+    version: 0.02
+  Business::DE::KontoCheck:
+    file: lib/Business/DE/KontoCheck.pm
+    version: 0.11
+generated_by: Module::Build version 0.2805
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.2.html
+  version: 1.2

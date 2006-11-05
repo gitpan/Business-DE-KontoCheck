@@ -11,22 +11,29 @@ $VERSION = '0.02';
 @EXPORT_OK = qw(%error_codes);
 %EXPORT_TAGS = ( 'errorcodes' => [@EXPORT_OK]);
 sub new {
-	my $type = shift;
-	my $args = shift;
+    my ($class, $args) = @_;
 	my $self = {};
 	my @args = qw(PLZ BLZ INST METHOD ORT KONTONR BIC);
 	@$self{@args} = @$args{@args};
-	bless ($self, $type);
+	bless ($self, $class);
 }
-sub setValue {
-	my $self = shift;
-	my %args = @_;
+
+sub get_zip { $_[0]->{PLZ} }
+sub get_blz { $_[0]->{BLZ} }
+sub get_bankname { $_[0]->{INST} }
+sub get_location { $_[0]->{ORT} }
+sub get_account_no { $_[0]->{KONTONR} }
+sub get_bic { $_[0]->{BIC} }
+sub get_method { $_[0]->{METHOD} }
+
+sub _setValue {
+	my ($self, %args) = @_;
 	while (my ($key,$value) = each %args) {
 		$self->{$key} = $value;
 	}
 }
 sub check {
-	my $self = shift;
+	my ($self) = @_;
 	#print "debug 1\n";
 	return 1 unless $self->{ERRORS};
 	#print "debug 2\n";
@@ -35,18 +42,17 @@ sub check {
 	return 0;
 }
 
-sub setErrorCodes {
+sub _setErrorCodes {
 	my $self = shift;
 	my $codes = shift or return;
 	%error_codes = %$codes;
 }
-sub setError {
-	my $self = shift;
-	my $error = shift;
+sub _setError {
+	my ($self, $error) = @_;
 	$self->{ERRORS}->{$error}++
 }
 sub printErrors {
-	my $self = shift;
+	my ($self) = @_;
 	my $errors = $self->{ERRORS} || return '';
 	#print Dumper $self->{ERRORS};
 	my $err_string;
@@ -57,7 +63,7 @@ sub printErrors {
 	return $err_string;
 }
 sub getErrors {
-	my $self = shift;
+	my ($self) = @_;
 	my $errors = $self->{ERRORS} || return '';
 	return [keys %$errors];
 }
@@ -72,3 +78,78 @@ sub getErrors {
 	ERR_METHOD      => 'Method not implemented yet',
 );
 1;
+
+__END__
+
+=pod
+
+=head1 NAME
+
+Business::DE::Konto - German Bank-Account data
+
+=head1 AUTHOR
+
+Tina Mueller
+
+=head1 METHODS
+
+=over 4
+
+=item new
+
+Contructor
+
+=item check
+
+Returns 1 if the account number check was valid or 0. This
+method should not be used as not all check methods have
+been implemented.
+
+=item get_zip
+
+Returns zipcode of the bank
+
+=item get_blz
+
+Returns blz of the bank.
+
+=item get_bankname
+
+Returns name of the bank institute
+
+=item get_location
+
+Reutrns Location (City, ...) of the bank.
+
+=item get_account_no
+
+Returns account number.
+
+=item get_method
+
+Returns the checkmethod for this bank.
+
+=item get_bic
+
+Returns BIC (Bank Identifier Code) of the bank.
+
+=item getErrors
+
+Returns error codes.
+
+=item printErrors
+
+Returns human readable error messages.
+
+
+=back
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2005-2006 by Tina Mueller
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.8.3 or,
+at your option, any later version of Perl 5 you may have available.
+
+=cut

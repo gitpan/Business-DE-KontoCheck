@@ -1,18 +1,16 @@
 package Business::DE::KontoCheck;
 require 5.00503;
+$VERSION = '0.11';
 use strict;
+use warnings;
 use Cwd;
+use Carp qw(carp croak);
 use Business::DE::Konto qw(:errorcodes);
-use vars qw($VERSION @ISA @EXPORT @EXPORT_OK %EXPORT_TAGS
-	$cache $CACHE_ON $CACHE_ALL $STORABLE);
+use vars qw($cache $CACHE_ON $CACHE_ALL $STORABLE);
 $CACHE_ALL = 0;
 $CACHE_ON = 1;
-require Exporter;
 #use Data::Dumper;
-use base qw(Exporter);
-#@EXPORT_OK = qw(check custom_error printerror returnerror);
-#@EXPORT = qw( );
-$VERSION = '0.09';
+
 my $check_code = {
 	# METHODE, MODULO, [GEWICHTUNGEN], PRUEFZIFFER-STELLE, FALLBACKMWTHODE
 	"00" => ["QUER",  10,[2, 1, 2, 1, 2, 1, 2, 1, 2], 10, "00"],
@@ -93,56 +91,51 @@ my $check_code = {
 };
 
 sub new {
-	my $type = shift;
-	my $args = {@_};
-	my $self  = {};
+	my ($class, %args) = @_;
+	my $self = bless {}, $class;
 	$self->{BLZFILE} = "./BLZ.dat";
-	$self->{BLZFILE} = $args->{BLZFILE} if (defined $args->{BLZFILE});
-	$self->{MODE_BLZ_FILE} = $args->{MODE_BLZ_FILE} || 'BANK';
-	die "Could not find BLZFILE ".cwd."/$self->{BLZFILE}." unless -e $self->{BLZFILE};
-	bless($self, $type);
+	$self->{BLZFILE} = $args{BLZFILE} if defined $args{BLZFILE};
+	$self->{MODE_BLZ_FILE} = $args{MODE_BLZ_FILE} || 'BANK';
+	croak "Could not find BLZFILE ".cwd."/$self->{BLZFILE}." unless -f $self->{BLZFILE};
 	$self->_cache_all() if $CACHE_ALL;
 	if ($self->{MODE_BLZ_FILE} eq 'MINIMAL') {
 		#eval qq{use Storable;warn "loaded Storable\n"};
-		eval qq{use Storable;};
-		if ($@) {die "Errors while loading Storable.pm\n";}
+		require Storable;
 	} 
 	return $self;
 	
 }
 ############################
 sub check {
-	my $self = shift;
-	my $args = {@_};
-	$self->{ERRORS}={};
-	$self->{KONTONR} = $args->{KONTONR} if defined $args->{KONTONR};
-	$self->{BLZ} = $args->{BLZ} if defined $args->{BLZ};
+	my ($self, %args) = @_;
+	$self->{ERRORS} = {};
+	$self->{KONTONR} = $args{KONTONR} if defined $args{KONTONR};
+	$self->{BLZ} = $args{BLZ} if defined $args{BLZ};
 	#print "new Konto...\n";
-	my $konto = new Business::DE::Konto();
+	my $konto = Business::DE::Konto->new;
 	unless ($self->_validBLZ($self->{BLZ}) && $self->_validKONTONR($self->{KONTONR})) {
-		$konto->setError($_) for keys %{$self->{ERRORS}};
+		$konto->_setError($_) for keys %{ $self->{ERRORS} };
 #print Dumper $self->{ERRORS};
 		return $konto;
 	}
-	my $result = $self->_readBLZFile($self->{BLZ});
+	my $result = $self->get_info_for_blz($self->{BLZ}, $konto);
 	#print Dumper $result;
 	# ok, input is okay, so now let's go into details
 	if ($result) {
-		$konto->setValue(%$result);
 		#print Dumper $konto;
-		$konto->setValue(BLZ => $self->{BLZ}, KONTONR => $self->{KONTONR});
-		$konto->setErrorCodes($self->{ERRORCODES}) if $self->{ERRORCODES};
-		#print "pruefe ($konto->{KONTONR}, $konto->{METHOD})\n";
-		unless ($self->pruefe($konto)) {
-			$konto->setError("ERR_KNR_INVALID");
+		$konto->_setValue(KONTONR => $self->{KONTONR});
+		$konto->_setErrorCodes($self->{ERRORCODES}) if $self->{ERRORCODES};
+		#print "_pruefe ($konto->{KONTONR}, $konto->{METHOD})\n";
+		unless ($self->_pruefe($konto)) {
+			$konto->_setError("ERR_KNR_INVALID");
 			return $konto;
 		}
 	}
-	$konto->setError($_) for keys %{$self->{ERRORS}};
+	$konto->_setError($_) for keys %{$self->{ERRORS}};
 	return $konto;
 }
 ############################
-sub _validBLZ ($) {
+sub _validBLZ {
 	my $self = shift;
 	my $blz = shift;
 	$self->{ERRORS}->{ERR_NO_BLZ}++,return unless defined $blz;
@@ -152,7 +145,7 @@ sub _validBLZ ($) {
 	return 1;
 }
 ############################
-sub _validKONTONR($) {
+sub _validKONTONR {
 	my $self = shift;
 	my $kontonr = shift;
 	$self->{ERRORS}->{ERR_NO_KNR}++,return unless defined $kontonr;
@@ -166,18 +159,23 @@ sub _cache_all {
 	my $mode = $self->{MODE_BLZ_FILE} || 'BANK';
 	open BLZ, "<$self->{BLZFILE}" or die "Could not open BLZ-File $self->{BLZFILE}: $!";
 	if ($mode eq 'BANK') {
-		while (<BLZ>) {
-			my ($D_BLZ, $D_EIGEN, $OLD_BLZ, undef, undef, undef, $D_INST, $D_K_ORT, $D_PLZ, $D_ORT, undef, undef, undef, $D_BIC, $D_METHOD, undef) = 
-				unpack "A8A1A8AA4A5A58A20A5A29A27A5AA9A2A5", $_;
+		while (my $line = <BLZ>) {
+			my (
+                $D_BLZ, $D_EIGEN, $OLD_BLZ, undef, undef,
+                undef, $D_INST, $D_K_ORT, $D_PLZ, $D_ORT,
+                undef, undef, undef, $D_BIC, $D_METHOD,
+                undef
+            ) = 
+				unpack "A8A1A8AA4A5A58A20A5A29A27A5AA9A2A5", $line;
 				$cache->{$D_BLZ}->{METHOD} = $D_METHOD;
 				#$cache->{$D_BLZ}->{OLD_BLZ} = $OLD_BLZ;
 				$cache->{$OLD_BLZ}->{METHOD} = $D_METHOD if $D_BLZ eq "00000000";
 		}
 	}
 	elsif ($mode eq 'POST') {
-		while (<BLZ>) {
+		while (my $line = <BLZ>) {
 			if (my ($D_BLZ, $D_INST, $D_PLZ, $D_ORT, $D_METHOD, $REST) = 
-						m/^(\d{8})(.{58})(\d{5})(.{30})(\d\d)(\d)/ ) {
+						$line =~ m/^(\d{8})(.{58})(\d{5})(.{30})(\d\d)(\d)/ ) {
 				$D_INST =~ s/^\s+|\s+$//;
 				$D_ORT =~ s/^\s+|\s+$//;
 				$cache->{$D_BLZ}->{METHOD} = $D_METHOD;
@@ -193,11 +191,12 @@ sub _cache_all {
 	#<STDIN>;
 }
 ############################
-sub _readBLZFile($) {
-	my $self = shift;
-	my $blz = shift;
-	my $only_blz = shift||0;
+sub get_info_for_blz {
+    my ($self, $blz, $konto) = @_;
 	my $mode = $self->{MODE_BLZ_FILE} || 'BANK';
+    unless ($konto) {
+        $konto = Business::DE::Konto->new;
+    }
 	my ($line,$result);
 	unless ($mode eq 'MINIMAL') {
 		open BLZ, "<$self->{BLZFILE}" or die "Could not open BLZ-File $self->{BLZFILE}: $!";
@@ -227,8 +226,11 @@ sub _readBLZFile($) {
 		}
 		elsif ($mode eq 'BANK') {
 			chomp $line;
-			my ($D_BLZ, $D_EIGEN, $OLD_BLZ, undef, undef, undef, $D_INST, $D_K_ORT, $D_PLZ, $D_ORT, undef, undef, undef, $D_BIC, $D_METHOD, undef) = 
-				unpack "A8A1A8AA4A5A58A20A5A29A27A5AA9A2A5", $line;
+			my (
+                $D_BLZ, $D_EIGEN, $D_INST, $D_PLZ, $D_ORT,
+                $D_KURZ, $D_PAN, $D_BIC, $D_METHOD, $D_NUMBER
+            ) = 
+				unpack "A8A1A58A5A35A27A5A11A2A6", $line;
 			if ($D_BLZ ne $blz) {
 				#print "if ($D_BLZ ne $blz) {$blz = $D_BLZ};\n";
 				$blz = $D_BLZ;
@@ -254,21 +256,22 @@ sub _readBLZFile($) {
 		$result->{METHOD} = $cache->{$blz}->{METHOD};
 		$result->{BLZ} = $blz;
 	}
-	return $only_blz ? $result->{METHOD} : $result;
+    if ($result) {
+        $konto->_setValue(%$result);
+        return $konto;
+    }
+	return $result;
 }
 ############################
 sub _quersumme {
 	my $num = shift;
 	return $num if length $num == 1;
-	my $sum = do {
-		my $x;
-		foreach (split //, $num) {$x+=$_}
-		$x
-	};
+	my $sum = 0;
+    foreach (split //, $num) {$sum += $_}
 	return $sum;
 }
 ############################
-sub pruefe {
+sub _pruefe {
 	no strict 'refs';
 	my $self = shift;
 	my $konto = shift;
@@ -280,7 +283,7 @@ sub pruefe {
 		my ($method,$mod,$array,$pz_stelle,$m_alias) = @{$check_code->{$m}};
 		$pz_stelle--;
 		my $sum = $self->_add($array, $k, {METHOD => $method});
-		my $sub = "m$m_alias";
+		my $sub = "_m$m_alias";
 			#print "methode $sub\n";
 		if ($m == 13) {
 			$k = sprintf "%010s",$k;
@@ -325,7 +328,7 @@ sub pruefe {
 			#print "$ziffer == $pruefziffer\n";
 		}
 		elsif ($m eq "27" && $k > 999999999) {
-			$sub = "m27";
+			$sub = "_m27";
 			$sum = $self->_add($array, $k, {METHOD => $method});
 			$ziffer = $sub->($self,$array,$k,$sum,$mod);
 			$pruefziffer = $k % 10;
@@ -368,7 +371,7 @@ sub pruefe {
 			unless ($ziffer == $pruefziffer) {
 				my ($method,$mod,$array,$pz_stelle,$m_alias) = @{$check_code->{"01"}};
 				$pz_stelle--;
-				$sub = "m01";
+				$sub = "_m01";
 				$sum = $self->_add($array, $k, {METHOD => $method});
 				$pruefziffer = substr($k,$pz_stelle,1);
 				$ziffer = $sub->($self,$array,$k,$sum,$mod);
@@ -399,7 +402,7 @@ sub pruefe {
 					my ($method,$mod,$array,$pz_stelle,$m_alias) = @{$check_code->{$m}};
 					$pz_stelle--;
 					my $sum = $self->_add($array, $k, {METHOD => $method});
-					my $sub = "m$m_alias";
+					my $sub = "_m$m_alias";
 					#print "new test B ($k) $sub\n";
 					$ziffer = $sub->($self,$array,$k,$sum,$mod);
 				}
@@ -409,7 +412,7 @@ sub pruefe {
 					$pz_stelle--;
 					$mod = 7;
 					my $sum = $self->_add($array, $k, {METHOD => $method});
-					my $sub = "m$m_alias";
+					my $sub = "_m$m_alias";
 					#print "new test C ($k) $sub\n";
 					$ziffer = $sub->($self,$array,$k,$sum,$mod);
 				}
@@ -421,7 +424,7 @@ sub pruefe {
 					my ($method,$mod,$array,$pz_stelle,$m_alias) = @{$check_code->{10}};
 					$pz_stelle--;
 					my $sum = $self->_add($array, $k, {METHOD => $method});
-					my $sub = "m$m_alias";
+					my $sub = "_m$m_alias";
 					$pruefziffer = substr($k,$pz_stelle,1);
 					$ziffer = $sub->($self,$array,$k,$sum,$mod);
 			}
@@ -431,7 +434,7 @@ sub pruefe {
 				my ($method,$mod,$array,$pz_stelle,$m_alias) = @{$check_code->{20}};
 				$pz_stelle--;
 				my $sum = $self->_add($array, $k, {METHOD => $method});
-				my $sub = "m$m_alias";
+				my $sub = "_m$m_alias";
 				$pruefziffer = substr($k,$pz_stelle,1);
 				$ziffer = $sub->($self,$array,$k,$sum,$mod);
 			}
@@ -482,7 +485,7 @@ sub pruefe {
 				my ($method,$mod,$array,$pz_stelle,$m_alias) = @{$check_code->{$m}};
 				$pz_stelle--;
 				my $sum = $self->_add($array, $k, {METHOD => $method});
-				my $sub = "m$m_alias";
+				my $sub = "_m$m_alias";
 				$pruefziffer = substr($k,$pz_stelle,1);
 				$ziffer = $pruefziffer;
 			}
@@ -553,26 +556,26 @@ sub pruefe {
 		elsif ($m == 69) {
 			$k = sprintf "%010s",$k;
 			if ($k ge 9300000000 && $k lt 9400000000) {
-				$sub = "m06";
+				$sub = "_m06";
 				$ziffer = $sub->($self,$array,$k,$sum,$mod);
 				$pruefziffer = substr($k,$pz_stelle,1);
 			}
 			elsif ($k ge 9700000000  && $k lt 9800000000) {
-				$sub = "m27";
+				$sub = "_m27";
 				$pruefziffer = substr($k,$pz_stelle,1); # Kris 2001/11/22;
 				$sum = $self->_add($array, $k, {METHOD => $method});
 				$mod = 10;
 				$ziffer = $sub->($self,$array,$k,$sum,$mod);
 			}
 			else {
-				$sub = "m06";
+				$sub = "_m06";
 				$pz_stelle = 8;
 				$pz_stelle--;
 				$pruefziffer = substr($k,$pz_stelle,1); # Kris 2001/11/22;
 				$sum = $self->_add($array, $k, {METHOD => $method});
 				$ziffer = $sub->($self,$array,$k,$sum,$mod);
 				unless ($ziffer == $pruefziffer) {
-					$sub = "m27";
+					$sub = "_m27";
 					$pz_stelle = 9;
 					$pruefziffer = substr($k,$pz_stelle,1); # Kris 2001/11/22;
 					$mod = 10;
@@ -594,7 +597,7 @@ sub pruefe {
 				my ($method,$mod,$array,$pz_stelle,$m_alias) = @{$check_code->{"06"}};
 				$pz_stelle--;
 				my $sum = $self->_add($array, $k, {METHOD => $method});
-				my $sub = "m$m_alias";
+				my $sub = "_m$m_alias";
 				$pruefziffer = substr($k,$pz_stelle,1);
 				$ziffer = $pruefziffer;
 			}
@@ -628,7 +631,7 @@ sub pruefe {
 	}
 	else {
 		#warn "Method $m not implemented yet\n";
-		$konto->setError("ERR_METHOD");
+		$konto->_setError("ERR_METHOD");
 		return 0;
 	}
 }
@@ -654,19 +657,18 @@ sub _add {
 	return $sum;
 }
 ############################
-sub summe {
+sub _summe {
 	my $self = shift;
-	my @nums = @_;
 	my $sum;
-	$sum += $_ for @nums;
+	$sum += $_ for @_;
 	return $sum;
 }
 ############################
 sub getMethod2BLZ {
-	my $self = shift;
-	my $blz = shift;
-	my $result = $self->_readBLZFile($blz,1);
-	$result;
+    my ($self, $blz) = @_;
+    my $konto = Business::DE::Konto->new();
+	my $result = $self->get_info_for_blz($blz, $konto) or return;
+	return $konto->get_method;
 }
 ############################
 # Modulus 10, Gewichtung 2, 1, 2, 1, 2, 1, 2, 1, 2
@@ -681,7 +683,7 @@ sub getMethod2BLZ {
 # Kontonummer). Ergibt sich nach der Subtraktion der
 # Rest 10, ist die Prüfziffer 0.
 # Testkontonummern:9290701, 539290858, 1501824, 1501832
-sub m00 {
+sub _m00 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $ziffer = $mod - $sum % 10;
 	#print "$ziffer = $mod - $sum % 10\n";
@@ -689,14 +691,14 @@ sub m00 {
 	return $ziffer;
 }
 ############################
-sub m01 {
+sub _m01 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	$sum = $sum % $mod;
 	my $ziffer = $mod - $sum;
 	return ($ziffer == 10)? 0 : $ziffer;
 }
 ############################
-sub m02 {
+sub _m02 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $rest = $sum % $mod;
 	return if ($rest == 1);
@@ -704,7 +706,7 @@ sub m02 {
 	return $mod - $rest;
 }
 ############################
-sub m06 {
+sub _m06 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	$k = sprintf "%010s", $k;
 	my $rest = $sum % $mod;
@@ -718,20 +720,20 @@ sub m06 {
 	return $ziffer;
 }
 ############################
-sub m08 {
+sub _m08 {
 	no strict 'refs';
 	my ($self,$array,$k,$sum,$mod)= @_;
 	return unless $k > 60000;
-	my $method = "m00"; # BUGFIX kristian
+	my $method = "_m00"; # BUGFIX kristian
 	$self->$method($array,$k,$sum,$mod);
 }
 ############################
-sub m09 {
+sub _m09 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	return $k % 10;
 }
 ############################
-sub m11 {
+sub _m11 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $rest = $sum % $mod;
 	my $ziffer;
@@ -744,7 +746,7 @@ sub m11 {
 
 }
 ############################
-sub m13 {
+sub _m13 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	substr($k,0,1)=0;
 	$sum = $sum % 10;
@@ -754,7 +756,7 @@ sub m13 {
 
 }
 ############################
-sub m14 {
+sub _m14 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $rest = $sum % $mod;
 	return if ($rest == 1);
@@ -762,7 +764,7 @@ sub m14 {
 	return $mod - $rest;
 }
 ############################
-sub m16 {
+sub _m16 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $rest = $sum % $mod;
 	my $ziffer;
@@ -774,7 +776,7 @@ sub m16 {
 	return $ziffer;
 }
 ############################
-sub m17 {
+sub _m17 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my @k = (split //, (sprintf "%010s",$k))[1..7];
 	my $pruef = pop @k;
@@ -797,7 +799,7 @@ sub m17 {
 	}
 }
 ############################
-sub m21 {
+sub _m21 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $ziffer = _quersumme $sum;
 	while ($ziffer > 9) {
@@ -808,7 +810,7 @@ sub m21 {
 
 }
 ############################
-sub m24 {
+sub _m24 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $blz = $self->{BLZ};
 	$k = sprintf "%010s", $k;
@@ -831,7 +833,7 @@ sub m24 {
 	return $ziffer;
 }
 ############################
-sub m25 {
+sub _m25 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	$k = sprintf "%010s", $k;
 	my $rest = $sum % $mod;
@@ -849,12 +851,12 @@ sub m25 {
 	return $ziffer;
 }
 ############################
-sub m26 {
+sub _m26 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 
 }
 ############################
-sub m27 {
+sub _m27 {
 	#print "method 27\n";
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $ergebnis;
@@ -878,14 +880,14 @@ sub m27 {
 	return $ziffer;
 
 }
-sub m31 {
+sub _m31 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $ziffer = $sum % $mod;
 	return if $ziffer == 10;
 	return $ziffer;
 }
 
-sub m35 {
+sub _m35 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	$k = sprintf "%010s", $k;
 	my $rest = $sum % $mod;
@@ -893,7 +895,7 @@ sub m35 {
 	#print "$sum, z: $ziffer, mod: $mod\n";
 	return $ziffer;
 }
-sub m52 {
+sub _m52 {
 	my ($self,$array,$k,$sum,$mod)= @_;
 	my $ix = 0;
 	$ix++ while $k =~ s/^0//g;
@@ -937,9 +939,13 @@ since June 5th, 2006.
 
 =head1 SYNOPSIS
 
-  use Business::DE::KontoCheck;
-  my $kcheck = Business::DE::KontoCheck->new(%hash);
-
+    use Business::DE::KontoCheck;
+    my $kcheck = Business::DE::KontoCheck->new(
+        BLZFILE => "path/to/blzpc.txt",
+    );
+    my $konto = $kcheck->get_info_for_blz($blz);
+    # $konto is a Business::DE::Konto
+    my $bankname = $konto->get_bankname;
 
 =head1 DESCRIPTION
 
@@ -1054,12 +1060,36 @@ or
   Beside checking a BLZ/AccountNo. there are the following
   methods available:
 
-  getMethod2BLZ (BLZ)
+=over 4
+
+=item getMethod2BLZ (BLZ)
 
     Returns the Check-method for that BLZ.
     my $method = $kcheck->getMethod2BLZ($blz);
     Returns the method (element in "00".."A1").
     If the BLZ doesn't exist, it returns undef.
+
+=item check
+
+Creates a Business::DE::Konto object and checks if account number is valid.
+This method should not be used as not all check methods are implemented.
+
+=item C<new>
+
+The Constructor.
+
+=item get_info_for_blz
+
+    my $kcheck = Business::DE::KontoCheck->new(
+        BLZFILE => "path/to/blzpc.txt",
+    );
+    my $konto = $kcheck->get_info_for_blz($blz);
+    my $bankname = $konto->get_bankname;
+
+See L<Business::DE::Konto> for other methods.
+
+
+=back
 
 =head2 EXPORT
 
