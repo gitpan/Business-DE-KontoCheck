@@ -1,6 +1,6 @@
 package Business::DE::KontoCheck;
 require 5.00503;
-$VERSION = '0.11';
+$VERSION = '0.12';
 use strict;
 use warnings;
 use Cwd;

@@ -1,6 +1,6 @@
 ---
 name: Business-DE-KontoCheck
-version: 0.11
+version: 0.12
 author:
   - Tina Mueller
 abstract: Validating Bank-Account Numbers for Germany
@@ -13,7 +13,7 @@ provides:
     version: 0.02
   Business::DE::KontoCheck:
     file: lib/Business/DE/KontoCheck.pm
-    version: 0.11
+    version: 0.12
 generated_by: Module::Build version 0.2805
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html
